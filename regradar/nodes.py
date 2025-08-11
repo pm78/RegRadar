@@ -6,6 +6,7 @@ import io
 import json
 import os
 import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta
 from typing import Iterable, List, Optional
 
 import httpx
@@ -217,6 +218,9 @@ def publish(result: HashStoreResult, summary: dict, score: dict) -> dict:
         )
         session.add(assessment)
         session.commit()
+        send_slack_notification(
+            f"New impact assessment {assessment.id} (score: {assessment.score})"
+        )
         return {"assessment_id": assessment.id}
     finally:
         session.close()
@@ -224,3 +228,55 @@ def publish(result: HashStoreResult, summary: dict, score: dict) -> dict:
 
 def human_review(_: dict) -> dict:
     return {"status": "needs_human_review"}
+
+
+def send_slack_notification(message: str) -> None:
+    url = os.getenv("SLACK_WEBHOOK_URL")
+    if not url:
+        return
+    try:
+        httpx.post(url, json={"text": message}, timeout=TIMEOUT)
+    except Exception:
+        pass
+
+
+def _send_email(subject: str, body: str) -> None:
+    token = os.getenv("POSTMARK_TOKEN")
+    sender = os.getenv("POSTMARK_SENDER")
+    recipient = os.getenv("POSTMARK_RECIPIENT")
+    if not token or not sender or not recipient:
+        return
+    headers = {"X-Postmark-Server-Token": token}
+    data = {"From": sender, "To": recipient, "Subject": subject, "TextBody": body}
+    try:
+        httpx.post("https://api.postmarkapp.com/email", headers=headers, json=data, timeout=TIMEOUT)
+    except Exception:
+        pass
+
+
+def build_weekly_digest() -> None:
+    """Aggregate top impacts of the last week and email a digest."""
+    session = SessionLocal()
+    try:
+        since = datetime.utcnow() - timedelta(days=7)
+        rows = (
+            session.query(ImpactAssessment, Document, Source)
+            .join(DocumentVersion, ImpactAssessment.document_version_id == DocumentVersion.id)
+            .join(Document, DocumentVersion.document_id == Document.id)
+            .join(Source, Document.source_id == Source.id)
+            .filter(ImpactAssessment.created_at >= since)
+            .order_by(ImpactAssessment.score.desc())
+            .limit(5)
+            .all()
+        )
+        if not rows:
+            return
+        lines = []
+        for assessment, document, source in rows:
+            lines.append(
+                f"[{source.name}] {document.external_id} - score {assessment.score}\n{assessment.summary}"
+            )
+        body = "\n\n".join(lines)
+        _send_email("Weekly Digest", body)
+    finally:
+        session.close()
