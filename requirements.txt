@@ -3,3 +3,5 @@ trafilatura==1.7.0
 pypdf==3.17.1
 langgraph==0.0.20
 PyYAML==6.0.1
+openai>=1.0.0
+SQLAlchemy>=2.0.0

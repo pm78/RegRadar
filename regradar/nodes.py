@@ -3,11 +3,17 @@ from __future__ import annotations
 import hashlib
 import difflib
 import io
+import json
+import os
 import xml.etree.ElementTree as ET
 from typing import Iterable, List, Optional
 
 import httpx
 import trafilatura
+try:
+    from openai import OpenAI
+except Exception:  # pragma: no cover - openai optional
+    OpenAI = None  # type: ignore
 from pypdf import PdfReader
 
 from .database import (
@@ -15,6 +21,7 @@ from .database import (
     Document,
     DocumentVersion,
     HashStoreResult,
+    ImpactAssessment,
     ParsedDoc,
     RawDoc,
     SessionLocal,
@@ -137,3 +144,83 @@ def compute_diff(result: HashStoreResult, previous: Optional[DocumentVersion]) -
         return event
     finally:
         session.close()
+
+
+# LLM-related utilities and nodes
+
+
+def _load_prompt(name: str) -> str:
+    path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "prompts", name)
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def _get_client() -> Optional[OpenAI]:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key or OpenAI is None:
+        return None
+    return OpenAI(api_key=api_key)
+
+
+def classify(diff_text: str) -> dict:
+    prompt = _load_prompt("classify.txt").replace("{text}", diff_text)
+    client = _get_client()
+    try:
+        if client:
+            resp = client.responses.create(model="gpt-4o-mini", input=prompt)
+            data = json.loads(resp.output_text)
+        else:
+            raise RuntimeError
+    except Exception:
+        # Fallback stub
+        data = {"category": "general", "priority": "medium", "confidence": 0.8}
+    return data
+
+
+def summarize_impact(document_text: str) -> dict:
+    prompt = _load_prompt("summarize_impact.txt").replace("{text}", document_text)
+    client = _get_client()
+    try:
+        if client:
+            resp = client.responses.create(model="gpt-4o-mini", input=prompt)
+            data = json.loads(resp.output_text)
+        else:
+            raise RuntimeError
+    except Exception:
+        data = {"summary": "", "actions": [], "citations": []}
+    return data
+
+
+def guard_citations(document_text: str, summary: dict) -> dict:
+    citations = summary.get("citations", [])
+    passed = all(url in document_text for url in citations)
+    return {"guard_passed": passed}
+
+
+def score_priority(classification: dict) -> dict:
+    priority_weights = {"low": 1, "medium": 2, "high": 3}
+    priority = classification.get("priority", "low")
+    weight = priority_weights.get(priority, 1)
+    confidence = classification.get("confidence", 0)
+    score = weight * confidence
+    return {"score": score}
+
+
+def publish(result: HashStoreResult, summary: dict, score: dict) -> dict:
+    session = SessionLocal()
+    try:
+        assessment = ImpactAssessment(
+            document_version_id=result.version.id,
+            summary=summary.get("summary"),
+            actions="\n".join(summary.get("actions", [])),
+            score=score.get("score"),
+        )
+        session.add(assessment)
+        session.commit()
+        return {"assessment_id": assessment.id}
+    finally:
+        session.close()
+
+
+def human_review(_: dict) -> dict:
+    return {"status": "needs_human_review"}

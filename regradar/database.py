@@ -11,6 +11,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    Float,
     UniqueConstraint,
     create_engine,
 )
@@ -73,6 +74,19 @@ class ChangeEvent(Base):
 
     version = relationship("DocumentVersion", foreign_keys=[document_version_id])
     previous = relationship("DocumentVersion", foreign_keys=[previous_version_id])
+
+
+class ImpactAssessment(Base):
+    __tablename__ = "impact_assessment"
+
+    id = Column(Integer, primary_key=True)
+    document_version_id = Column(Integer, ForeignKey("document_version.id"), nullable=False)
+    summary = Column(Text)
+    actions = Column(Text)
+    score = Column(Float)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    version = relationship("DocumentVersion")
 
 
 # Helper dataclasses used by nodes

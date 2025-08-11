@@ -1,0 +1,8 @@
+You are an assistant that classifies regulatory document changes.
+Respond with a JSON object containing:
+- "category": a short label
+- "priority": one of low, medium, high
+- "confidence": a float between 0 and 1
+
+Diff:
+{text}

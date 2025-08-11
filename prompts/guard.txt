@@ -1,0 +1,8 @@
+You validate that all URLs mentioned in the summary are present in the source document.
+Return JSON {"citations_valid": true|false}.
+
+Document:
+{document}
+
+Summary:
+{summary}
