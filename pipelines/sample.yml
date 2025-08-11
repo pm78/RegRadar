@@ -1,0 +1,9 @@
+entry: start
+nodes:
+  - name: start
+    callable: pipelines.dummy:start
+  - name: finish
+    callable: pipelines.dummy:finish
+edges:
+  - source: start
+    target: finish
