@@ -22,7 +22,7 @@ export default function ImpactPage() {
       return;
     }
     fetch((process.env.NEXT_PUBLIC_API_URL || '') + `/v1/impacts/${id}`, {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { 'X-API-Key': token },
     })
       .then((res) => res.json())
       .then(setAssessment)
@@ -43,10 +43,12 @@ export default function ImpactPage() {
           ))}
         </ul>
       </section>
-      <section>
-        <h2 className="text-xl font-semibold">Diff</h2>
-        <pre className="bg-gray-200 p-2 overflow-auto">{assessment.diff}</pre>
-      </section>
+      {assessment.diff && (
+        <section>
+          <h2 className="text-xl font-semibold">Diff</h2>
+          <pre className="bg-gray-200 p-2 overflow-auto">{assessment.diff}</pre>
+        </section>
+      )}
     </main>
   );
 }
