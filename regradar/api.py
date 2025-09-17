@@ -6,7 +6,7 @@ import os
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.security import APIKeyHeader
 from sqlalchemy.orm import Session, joinedload
 
@@ -21,7 +21,15 @@ from .database import (
 
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
-API_KEY = os.getenv("API_KEY")
+
+
+def _expected_api_key() -> Optional[str]:
+    """Return the API key expected by the service, if one is configured."""
+
+    api_key = os.getenv("API_KEY")
+    if api_key:
+        return api_key
+    return None
 
 
 def get_db() -> Session:
@@ -33,12 +41,24 @@ def get_db() -> Session:
 
 
 def require_api_key(api_key: str = Depends(api_key_header)) -> None:
-    if API_KEY and api_key == API_KEY:
+    """Validate the provided API key if the service is configured to require one."""
+
+    expected = _expected_api_key()
+    if expected is None:
+        # No API key configured: allow unauthenticated access (useful for local dev/tests).
+        return
+    if api_key == expected:
         return
     raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 app = FastAPI(title="RegRadar API")
+
+
+SORTABLE_FIELDS = {
+    "created_at": ImpactAssessment.created_at,
+    "score": ImpactAssessment.score,
+}
 
 
 @app.get("/v1/changes", dependencies=[Depends(require_api_key)])
@@ -47,8 +67,14 @@ def list_changes(
     end_date: Optional[str] = None,
     source_id: Optional[int] = None,
     min_score: Optional[float] = None,
+    limit: int = Query(50, ge=1, le=200, description="Maximum number of items to return."),
+    offset: int = Query(0, ge=0, description="Number of items to skip before collecting results."),
+    sort: str = Query(
+        "-created_at",
+        description="Sort order. Prefix with '-' for descending order. Supported fields: created_at, score.",
+    ),
     db: Session = Depends(get_db),
-) -> Dict[str, List[Dict[str, Any]]]:
+) -> Dict[str, Any]:
     """Return published impact assessments with optional filters."""
 
     query = (
@@ -68,7 +94,22 @@ def list_changes(
     if min_score:
         query = query.filter(ImpactAssessment.score >= min_score)
 
-    rows = query.order_by(ImpactAssessment.created_at.desc()).all()
+    sort_desc = sort.startswith("-")
+    sort_field_name = sort[1:] if sort_desc else sort
+    column = SORTABLE_FIELDS.get(sort_field_name)
+    if column is None:
+        raise HTTPException(status_code=400, detail="Invalid sort parameter")
+
+    order_clause = column.desc() if sort_desc else column.asc()
+
+    total = query.count()
+
+    rows = (
+        query.order_by(order_clause)
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
     items: List[Dict[str, Any]] = []
     for assessment, version, document, source, change in rows:
         items.append(
@@ -86,7 +127,23 @@ def list_changes(
                 "diff": change.diff if change else None,
             }
         )
-    return {"items": items}
+    next_offset: Optional[int] = None
+    if offset + limit < total:
+        next_offset = offset + limit
+    prev_offset: Optional[int] = None
+    if offset > 0:
+        prev_offset = max(offset - limit, 0)
+
+    return {
+        "items": items,
+        "pagination": {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "next_offset": next_offset,
+            "prev_offset": prev_offset,
+        },
+    }
 
 
 @app.get("/v1/documents/{doc_id}", dependencies=[Depends(require_api_key)])
